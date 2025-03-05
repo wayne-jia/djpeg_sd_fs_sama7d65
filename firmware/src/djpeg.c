@@ -29,8 +29,8 @@
 
 //#include "181.c"
 
-#define MAX_LUMA_WIDTH   1280
-#define MAX_CHROMA_WIDTH 800
+#define MAX_LUMA_WIDTH   1024
+#define MAX_CHROMA_WIDTH 512
 
 static char buf0[16][MAX_LUMA_WIDTH];
 static char buf1[8][MAX_CHROMA_WIDTH];

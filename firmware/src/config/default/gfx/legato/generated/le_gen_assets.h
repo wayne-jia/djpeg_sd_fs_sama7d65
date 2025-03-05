@@ -146,7 +146,7 @@ extern leRasterFont bigFont;
  * Baseline:     27
  * Style:        Antialias
  * Glyph Count:  95
- * Range Count:  18
+ * Range Count:  19
  * Glyph Ranges: 0x20-0x7E
 ***********************************/
 extern leRasterFont smallFont;
@@ -158,7 +158,7 @@ extern leRasterFont smallFont;
  * Baseline:     21
  * Style:        Antialias
  * Glyph Count:  95
- * Range Count:  11
+ * Range Count:  14
  * Glyph Ranges: 0x20-0x7E
 ***********************************/
 extern leRasterFont extraSmallFont;

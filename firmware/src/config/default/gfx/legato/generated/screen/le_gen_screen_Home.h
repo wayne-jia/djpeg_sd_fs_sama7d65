@@ -15,7 +15,10 @@ extern "C" {
 // screen member widget declarations
 extern leWidget* Home_BackgroundPanel;
 extern leImageWidget* Home_ImageWidgetMCHPLogo;
+extern leImageWidget* Home_ImageWidgetMGSLogo;
 extern leLabelWidget* Home_LabelWidget_0;
+extern leLabelWidget* Home_LabelWidget_1;
+extern leLabelWidget* Home_Labelplay;
 
 // screen lifecycle functions
 // DO NOT CALL THESE DIRECTLY

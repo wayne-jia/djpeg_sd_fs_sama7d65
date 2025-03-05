@@ -24,7 +24,7 @@ CLEAN_SUBPROJECTS=${CLEAN_SUBPROJECTS_${SUBPROJECTS}}
 
 
 # Project Name
-PROJECTNAME=djpeg_ddr_sama7d65cu.X
+PROJECTNAME=sam_a7d65_curiosity.X
 
 # Active Configuration
 DEFAULTCONF=default

@@ -55,16 +55,16 @@
 #include "app.h"
 #include "user.h"
 #include "definitions.h"
+#include "t_800x360.h"
 
 //#define LOG_FPS_CALCULATION
 
+#define MJPEG_FILE_NAME      "mov.mjpeg"
 #define SDCARD_MOUNT_NAME    SYS_FS_MEDIA_IDX0_MOUNT_NAME_VOLUME_IDX0
-#define MAX_LUMA_WIDTH       1280
-#define MAX_CHROMA_WIDTH     800
-#define JPEG_FILE_NUM        443
-#define JPEG_FILE_MAX_SIZE   62000
-#define START_PIC_NUM        1001
-#define END_PIC_NUM          (START_PIC_NUM + JPEG_FILE_NUM - 1)
+#define MAX_LUMA_WIDTH       800
+#define MAX_CHROMA_WIDTH     400
+#define JPEG_FILE_MAX_SIZE   91000
+#define MAX_READ_SIZE        1024
 
 unsigned char __attribute__ ((section(".region_nocache"), aligned (64))) buf_y[2][MAX_LUMA_WIDTH * MAX_LUMA_WIDTH];
 unsigned char __attribute__ ((section(".region_nocache"), aligned (64))) buf_u[2][MAX_CHROMA_WIDTH * MAX_CHROMA_WIDTH];
@@ -75,6 +75,12 @@ typedef struct
     uint8_t jpg_buf[JPEG_FILE_MAX_SIZE];
     uint32_t jpg_len;
 } pic_desc;
+
+typedef struct
+{
+    uint8_t buf[MAX_READ_SIZE];
+    uint32_t len;
+} remain_data;
 
 void HEO_Initialize(void);
 extern int djpeg (char *p_jpg, int jpg_len, char *p_y, char *p_u, char *p_v, int *p_width, int *p_height);
@@ -103,11 +109,14 @@ extern int djpeg (char *p_jpg, int jpg_len, char *p_y, char *p_u, char *p_v, int
 
 APP_DATA appData;
 static pic_desc pics;
-static uint32_t jpg_index = START_PIC_NUM;
-static uint8_t jpg_file_name[10];
-static uint8_t firstjpg[JPEG_FILE_MAX_SIZE];
 static XLCDC_HEO_YCBCR_SURFACE surface;
 static uint8_t pingpong = 0;
+static int32_t curRead_pos = 0;
+static int32_t nextStart_pos = 0;
+static uint8_t g_EndByte = 0;
+static bool is_frame_start = false;
+static bool is_frame_end = false;
+static remain_data remain_buf;
 
 #ifdef LOG_FPS_CALCULATION
 static int index = 0;
@@ -186,15 +195,18 @@ void APP_Initialize ( void )
     surface.imageAddress[0] = &buf_y[pingpong];
     surface.imageAddress[1] = &buf_u[pingpong];
     surface.imageAddress[2] = &buf_v[pingpong];
-    surface.imageSizeX = 1280;
-    surface.imageSizeY = 720;
+    surface.imageSizeX = 800;
+    surface.imageSizeY = 360;
     surface.windowSizeX = 1280;
-    surface.windowSizeY = 720;
+    surface.windowSizeY = 576;
     surface.windowStartX = 0;
-    surface.windowStartY = 80;
-    surface.scaleToWindow = false;
+    surface.windowStartY = 112;
+    surface.scaleToWindow = true;
 
     XLCDC_DisplayHEOYCbCrSurface(&surface);
+
+    // Show a welcome image on YUV screen
+    djpeg(_p800x360_jpg, _p800x360_jpg_len, buf_y[pingpong], buf_u[pingpong], buf_v[pingpong], &width, &height);
 }
 
 void update_addr(void)
@@ -214,6 +226,113 @@ void update_addr(void)
     surface.imageAddress[2] = &buf_v[pingpong];
     XLCDC_DisplayHEOYCbCrSurface(&surface);
 }
+
+static inline void reset_frameStatus(void)
+{
+    curRead_pos = 0;
+    nextStart_pos = 0;
+    g_EndByte = 0;
+    is_frame_start = false;
+    is_frame_end = false;
+}
+
+// **************************************************************************************************
+// **************************************************************************************************
+// This function is to handle the case that the EOI are in the buffer but not
+// at the end of buffer.
+// 
+// | curRead_pos | ...... | ...  | ...  | New_curRead_pos  |  ... | ....... |     nextStart_pos     |
+// |     DATA    |  DATA  | 0xFF | 0xD9 |       0xFF       | 0xD8 |   DATA  | Ready to be read into |
+//
+// In this case, tha data from New_curRead_pos to the  nextStart_pos should be
+// stored locally to be used in the next frame decoding.
+// **************************************************************************************************
+// **************************************************************************************************
+static void endFrame_backUpRemainBuf(int32_t remainBytes)
+{
+    //printf("endFrame_backUpRemainBuf remainBytes:%d\r\n", remainBytes);
+    is_frame_end = true;
+    pics.jpg_len = curRead_pos;
+    remain_buf.len = remainBytes;
+    if (remain_buf.len)
+        memcpy(remain_buf.buf, &pics.jpg_buf[curRead_pos], remain_buf.len);
+    
+    // for (int i=0; i<16; i++) {
+    //     if (i == 0)
+    //         printf("remain buf[0]: ");
+
+    //     printf("%02x ", remain_buf.buf[i]);
+    //     if (i == 15)
+    //         printf("\r\n");
+    // }
+    
+}
+
+// *****************************************************************************
+// *****************************************************************************
+// Pay attention to the curRead_pos & nextStart_pos pointers, they handle all the
+// decoding process.
+// 
+// | curRead_pos |  ...  | ...... | ...  | ...  |     nextStart_pos     |
+// |     0xFF    |  0xD8 |  DATA  | 0xFF | 0xD9 | Ready to be read into |
+//
+// *****************************************************************************
+// *****************************************************************************
+static void handleRead_Normal(void)
+{
+    for (int32_t i=curRead_pos; i<nextStart_pos; i++)
+    {
+        if (i+1 < nextStart_pos)
+        {
+            if (pics.jpg_buf[i] == 0xFF)
+            {
+                //printf("curRead_pos:0x%x, buf[%x]: %02x, buf[%x+1]: %02x nextStart_pos:0x%x\r\n", curRead_pos, i, pics.jpg_buf[i], i, pics.jpg_buf[i+1], nextStart_pos);
+                if (pics.jpg_buf[i+1] == 0xD8)
+                {
+                    curRead_pos = i;
+                    //printf("@@@@@@@@@@@@@@@@@@@@@ is_frame_start, curRead_pos:0x%x\r\n", curRead_pos);
+                    is_frame_start = true;
+                    continue;
+                }
+                else if (pics.jpg_buf[i+1] == 0xD9)
+                {
+                    curRead_pos = i+2;
+                    //printf("i+1 is 0xD9, nextStart_pos:0x%x, curRead_pos:0x%x\r\n", nextStart_pos, curRead_pos);
+                    endFrame_backUpRemainBuf(nextStart_pos - curRead_pos);
+                    return;
+                }
+            }
+        }
+        else
+        {
+            //printf("i reach end buf[%d]:%02x. nextStart_pos:%d nBytesRead:%d\r\n", i, pics.jpg_buf[i], nextStart_pos, nBytesRead);
+        }
+    }
+    curRead_pos = nextStart_pos;
+}
+
+// The last byte of the previous buffer is 0xFF, the current buffer should be handled specially
+static void handleRead_LastFF()
+{
+    int32_t len = 0;
+    //printf("++++++++++++++++++++++++handleRead_LastFF nextStart_pos:0x%x jpg_buf[nextStart_pos]:%02x\r\n", nextStart_pos, pics.jpg_buf[nextStart_pos]);
+    if (pics.jpg_buf[curRead_pos] == 0xD9)
+    {
+        len = nextStart_pos - curRead_pos - 1;
+        curRead_pos++;
+        endFrame_backUpRemainBuf(len);
+    }
+    else
+    {
+        if (pics.jpg_buf[curRead_pos] == 0xD8)
+        {
+            //printf("@@@@@@***********@@@@ handleRead_LastFF is_frame_start, curRead_pos:0x%x\r\n", curRead_pos);
+            is_frame_start = true;
+        }
+        handleRead_Normal();
+    }
+}
+
 /******************************************************************************
   Function:
     void APP_Tasks ( void )
@@ -221,12 +340,11 @@ void update_addr(void)
   Remarks:
     See prototype in app.h.
  */
-
 void APP_Tasks ( void )
 {
     int width = 0, height = 0, i; 
+    uint8_t oneByte = 0;
     
-    uint8_t* tptr = NULL;
     /* Check the application's current state. */
     switch ( appData.state )
     {
@@ -237,7 +355,7 @@ void APP_Tasks ( void )
                 appData.state = APP_SET_CURRENT_DRIVE;
             }
             break;
-#if 1
+
         case APP_SET_CURRENT_DRIVE:
             if(SYS_FS_CurrentDriveSet(SDCARD_MOUNT_NAME) == SYS_FS_RES_FAILURE)
             {
@@ -253,8 +371,7 @@ void APP_Tasks ( void )
             break;
 
         case APP_OPEN_FILE:
-            sprintf(jpg_file_name, "images/%d.jpg", jpg_index);
-            appData.fileHandle = SYS_FS_FileOpen(jpg_file_name,
+            appData.fileHandle = SYS_FS_FileOpen(MJPEG_FILE_NAME,
                     (SYS_FS_FILE_OPEN_READ));
             if(appData.fileHandle == SYS_FS_HANDLE_INVALID)
             {
@@ -264,67 +381,91 @@ void APP_Tasks ( void )
             }
             else
             {
-                pics.jpg_len = SYS_FS_FileSize(appData.fileHandle);
+                //printf("open the file ok, size:%d\r\n", SYS_FS_FileSize(appData.fileHandle));
+                reset_frameStatus();
                 appData.state = APP_READ_FILE;
             }
             break;
 
         case APP_READ_FILE:
-            appData.nBytesRead = SYS_FS_FileRead(appData.fileHandle, (void *)pics.jpg_buf, pics.jpg_len);        
+            if (remain_buf.len)
+            {
+                reset_frameStatus();
+                memcpy(&pics.jpg_buf[curRead_pos], remain_buf.buf, remain_buf.len);
+                nextStart_pos += remain_buf.len;
+                remain_buf.len = 0;
+
+                // printf("curRead_pos:%d\r\n", curRead_pos);
+                // for (int i=0; i<16; i++) {
+                //     if (i == 0)
+                //         printf("jpg_buf cp from remain buf[0]: ");
+            
+                //     printf("%02x ", pics.jpg_buf[i]);
+                //     if (i == 15)
+                //         printf("\r\n");
+                // }
+            }
+                
+            appData.nBytesRead = SYS_FS_FileRead(appData.fileHandle, (void *)&pics.jpg_buf[nextStart_pos], MAX_READ_SIZE);
             if (appData.nBytesRead == -1)
             {
                 printf("There was an error while reading the file\r\n");
-                SYS_FS_FileClose(appData.fileHandle);
                 appData.state = APP_ERROR;
             }
             else if (appData.nBytesRead == 0)
             {
-                printf("read 0 len from file[%s]\r\n", jpg_file_name);
-                appData.state = APP_ERROR;
+                appData.state = APP_CLOSE_FILE;
             }
             else
             {
-                jpg_index++;
-                if (jpg_index > END_PIC_NUM)
-                    jpg_index = START_PIC_NUM;
-                SYS_FS_FileClose(appData.fileHandle);
-                appData.state = APP_PLAY_DEMO;            
+                nextStart_pos += appData.nBytesRead;  // nextStart_pos only should be plused here!!!
+                oneByte = pics.jpg_buf[nextStart_pos - 1];
+                if (g_EndByte == 0xFF)
+                    handleRead_LastFF();
+                else
+                    handleRead_Normal();
+
+                g_EndByte = oneByte;
+
+                if (is_frame_end)
+                {
+                    if (!is_frame_start)
+                    {
+                        printf("Invalid input file format of mjpeg\r\n");
+                        appData.state = APP_ERROR;
+                    }
+                    else
+                    {
+                        appData.state = APP_PLAY_DEMO;
+                    } 
+                }
             }
-            break;
-
-        case APP_CYCLE_READ:    
-
+            
             break;
 
         case APP_PLAY_DEMO:
             pingpong = 1 - pingpong;
             djpeg(pics.jpg_buf, pics.jpg_len, buf_y[pingpong], buf_u[pingpong], buf_v[pingpong], &width, &height);
             update_addr();
+            reset_frameStatus();
 #ifdef LOG_FPS_CALCULATION
             index++;
 #endif
-            appData.state = APP_OPEN_FILE;
+            appData.state = APP_READ_FILE;
             break;
 
         case APP_ERROR:
+        case APP_CLOSE_FILE:
             /* The application comes here when the demo has failed. */
-
+            SYS_FS_FileClose(appData.fileHandle);
+            appData.state = APP_OPEN_FILE;
             break;
 
         case APP_TEST:
-            // printf("dcode %d.jpg\r\n\r\n", START_PIC_NUM+0);
-            // for (i=0; i<pics[0].jpg_len; i++)
-            // {
-            //     printf("0x%02x, ", pics[0].jpg_buf[i]);
-            //     if ((i + 1) % 12 == 0)
-            //         printf("\r\n");
-            // }
-            // printf("\r\n\r\n");
-
             djpeg(pics.jpg_buf, pics.jpg_len, buf_y[pingpong], buf_u[pingpong], buf_v[pingpong], &width, &height);
             appData.state = APP_ERROR;
             break;
-#endif
+
         default:
             break;
     }

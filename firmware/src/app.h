@@ -101,7 +101,7 @@ typedef enum
     APP_READ_FILE,
 
     /* The app closes the file and idles */
-    APP_CYCLE_READ,
+    APP_CLOSE_FILE,
 
     APP_PLAY_DEMO,
 

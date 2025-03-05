@@ -284,7 +284,8 @@ build/default/debug/_ext/1360937237/app.o: ../src/app.c ../src/app.h \
  ../src/config/default/system/int/sys_int.h \
  ../src/config/default/system/cache/sys_cache.h \
  ../src/config/default/osal/osal.h \
- ../src/config/default/system/debug/sys_debug.h ../src/app.h
+ ../src/config/default/system/debug/sys_debug.h ../src/app.h \
+ ../src/t_800x360.h
 
 ../src/app.h:
 
@@ -869,3 +870,5 @@ build/default/debug/_ext/1360937237/app.o: ../src/app.c ../src/app.h \
 ../src/config/default/system/debug/sys_debug.h:
 
 ../src/app.h:
+
+../src/t_800x360.h:

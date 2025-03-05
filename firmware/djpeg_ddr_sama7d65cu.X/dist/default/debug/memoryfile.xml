@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project>
-  <executable name="dist/default/debug/djpeg_ddr_sama7d65cu.X.debug.elf">
+  <executable name="dist/default/debug/sam_a7d65_curiosity.X.debug.elf">
     <memory name="data">
       <units>bytes</units>
       <length>2130706432</length>
-      <used>5270144</used>
-      <free>2125436288</free>
+      <used>5334944</used>
+      <free>2125371488</free>
     </memory>
   </executable>
 </project>
